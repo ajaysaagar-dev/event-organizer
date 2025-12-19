@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { Bell, Clock, BellOff } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
-import API_URL from "../config/api";
+import { executeQuery } from "../utils/db";
 import "../css/reminder.css";
 import Navigation from "../components/Navigation";
 
@@ -20,27 +20,56 @@ export default function Reminder() {
 
   const loadReminders = async () => {
     setLoading(true);
-    const res = await fetch(`${API_URL}/tasks/reminder/${user.id}`);
-    const data = await res.json();
-    setTasks(Array.isArray(data) ? data : []);
+    
+    // Get tasks with reminders assigned to current user
+    const query = `
+      SELECT 
+        t.id,
+        t.title,
+        t.description,
+        t.due_date,
+        t.created_at,
+        assignedBy.name as assigned_by_name
+      FROM tasks t
+      INNER JOIN task_assignments ta ON t.id = ta.task_id
+      LEFT JOIN users assignedBy ON t.assigned_by = assignedBy.id
+      WHERE ta.user_id = ${user.id} 
+        AND t.has_reminder = 1 
+        AND t.completed = 0
+      ORDER BY t.due_date ASC, t.created_at DESC
+    `;
+    
+    const result = await executeQuery(query);
+    
+    if (result.success && result.rows) {
+      setTasks(result.rows);
+    } else {
+      setTasks([]);
+      console.error("Error loading reminders:", result.error);
+    }
+    
     setLoading(false);
   };
 
   const stopReminder = async (completed) => {
-  await fetch(
-    `${API_URL}/tasks/${selectedTask.id}/stop-reminder/${user.id}`,
-    {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ completed })
+    // Update task: stop reminder and optionally mark as completed
+    const completedSql = completed ? `completed = 1, completed_by = ${user.id}, completed_at = NOW(),` : '';
+    const query = `
+      UPDATE tasks 
+      SET ${completedSql} has_reminder = 0
+      WHERE id = ${selectedTask.id}
+    `;
+    
+    const result = await executeQuery(query);
+    
+    if (!result.success) {
+      alert("Failed to stop reminder: " + result.error);
     }
-  );
 
-  setShowConfirm(false);
-  setSelectedTask(null);
-  loadReminders();
-};
-
+    setShowConfirm(false);
+    setSelectedTask(null);
+    loadReminders();
+  };
 
   return (
     <>
@@ -48,13 +77,12 @@ export default function Reminder() {
 
       <div className="reminder-page">
         <div className="reminder-header">
-  <h1>
-    <Bell size={26} />
-    Reminder
-  </h1>
-  <p>Tasks with active reminders</p>
-</div>
-
+          <h1>
+            <Bell size={26} />
+            Reminder
+          </h1>
+          <p>Tasks with active reminders</p>
+        </div>
 
         {loading ? (
           <div className="reminder-loading">Loading reminders…</div>
