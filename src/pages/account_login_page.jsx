@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
-import API_URL from "../config/api";
+import { executeQuery, escapeSql } from "../utils/db";
 import "../css/common.css";
 
 export default function Account_Login_Page() {
@@ -21,30 +21,25 @@ export default function Account_Login_Page() {
     setLoading(true);
 
     try {
-      const res = await fetch(`${API_URL}/auth/login`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          email: email.trim(),
-          password: password.trim(),
-        }),
-      });
+      const trimmedEmail = email.trim();
+      const trimmedPassword = password.trim();
 
-      const data = await res.json();
+      // Query to find user by email and password
+      const query = `SELECT id, name, email FROM users WHERE email = ${escapeSql(trimmedEmail)} AND password = ${escapeSql(trimmedPassword)}`;
+      const result = await executeQuery(query);
 
-      if (!res.ok) {
-        alert(data.error || "Login failed");
+      if (!result.success) {
+        alert(result.error || "Login failed");
         return;
       }
 
-      if (!data.user) {
-        alert("Invalid server response");
+      if (!result.rows || result.rows.length === 0) {
+        alert("Invalid email or password");
         return;
       }
 
-      login(data.user);
+      const user = result.rows[0];
+      login(user);
       navigate("/home", { replace: true });
     } catch (err) {
       console.error(err);
