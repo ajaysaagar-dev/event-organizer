@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { CheckCircle2, X } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
-import API_URL from "../config/api";
+import { executeQuery } from "../utils/db";
 import Navigation from "../components/Navigation";
 import "../css/completed.css";
 
@@ -18,9 +18,33 @@ export default function Completed() {
 
   const loadCompleted = async () => {
     setLoading(true);
-    const res = await fetch(`${API_URL}/tasks/completed/${user.id}`);
-    const data = await res.json();
-    setTasks(Array.isArray(data) ? data : []);
+    
+    // Get completed tasks assigned to current user with assignment info
+    const query = `
+      SELECT 
+        t.id,
+        t.title,
+        t.description,
+        t.completed_at,
+        assignedBy.name as assigned_by_name,
+        completedBy.name as completed_by_name
+      FROM tasks t
+      INNER JOIN task_assignments ta ON t.id = ta.task_id
+      LEFT JOIN users assignedBy ON t.assigned_by = assignedBy.id
+      LEFT JOIN users completedBy ON t.completed_by = completedBy.id
+      WHERE ta.user_id = ${user.id} AND t.completed = 1
+      ORDER BY t.completed_at DESC
+    `;
+    
+    const result = await executeQuery(query);
+    
+    if (result.success && result.rows) {
+      setTasks(result.rows);
+    } else {
+      setTasks([]);
+      console.error("Error loading completed tasks:", result.error);
+    }
+    
     setLoading(false);
   };
 
