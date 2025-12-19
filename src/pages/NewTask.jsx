@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { Plus, UserPlus, Clock, Bell } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
-import API_URL from "../config/api";
+import { executeQuery, escapeSql, formatSqlDate, formatSqlBoolean } from "../utils/db";
 import "../css/newtask.css";
 import Navigation from "../components/Navigation";
 
@@ -30,56 +30,113 @@ export default function NewTask() {
 
   const loadTasks = async () => {
     setLoading(true);
-    const res = await fetch(`${API_URL}/tasks/work/${user.id}`);
-    const data = await res.json();
-    setTasks(Array.isArray(data) ? data : []);
+    
+    // Get tasks assigned to current user that are not completed
+    const query = `
+      SELECT t.id, t.title, t.description, t.has_reminder, t.is_urgent, t.due_date
+      FROM tasks t
+      INNER JOIN task_assignments ta ON t.id = ta.task_id
+      WHERE ta.user_id = ${user.id} AND t.completed = 0
+      ORDER BY t.created_at DESC
+    `;
+    
+    const result = await executeQuery(query);
+    
+    if (result.success && result.rows) {
+      setTasks(result.rows);
+    } else {
+      setTasks([]);
+      console.error("Error loading tasks:", result.error);
+    }
+    
     setLoading(false);
   };
 
   const loadProfiles = async () => {
-    const res = await fetch(`${API_URL}/users`);
-    const data = await res.json();
-    setProfiles(Array.isArray(data) ? data.filter(u => u.id !== user.id) : []);
+    // Get all users except current user
+    const query = `SELECT id, name FROM users WHERE id != ${user.id} ORDER BY name`;
+    const result = await executeQuery(query);
+    
+    if (result.success && result.rows) {
+      setProfiles(result.rows);
+    } else {
+      setProfiles([]);
+      console.error("Error loading profiles:", result.error);
+    }
   };
 
   /* ---------- ACTIONS ---------- */
 
   const handleCompleteTask = async (taskId) => {
-    await fetch(`${API_URL}/tasks/${taskId}/complete/${user.id}`, {
-      method: "PUT",
-    });
-    loadTasks();
+    // Mark task as completed
+    const query = `UPDATE tasks SET completed = 1, completed_by = ${user.id}, completed_at = NOW() WHERE id = ${taskId}`;
+    const result = await executeQuery(query);
+    
+    if (result.success) {
+      loadTasks();
+    } else {
+      alert("Failed to complete task: " + result.error);
+    }
   };
 
   const handleAssignTask = async (e) => {
     e.preventDefault();
     if (!title || assignedUsers.length === 0) return;
 
-    const res = await fetch(`${API_URL}/tasks`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        title,
-        description,
-        assigned_to: assignedUsers,
-        assigned_by: user.id,
-        due_date: dueDate || null,
-        has_reminder: hasReminder,
-        is_urgent: isUrgent,
-      }),
-    });
+    try {
+      // Insert task
+      const insertTaskQuery = `
+        INSERT INTO tasks (title, description, assigned_by, due_date, has_reminder, is_urgent, completed, created_at)
+        VALUES (
+          ${escapeSql(title)},
+          ${escapeSql(description)},
+          ${user.id},
+          ${dueDate ? formatSqlDate(dueDate) : 'NULL'},
+          ${formatSqlBoolean(hasReminder)},
+          ${formatSqlBoolean(isUrgent)},
+          0,
+          NOW()
+        )
+      `;
+      
+      const taskResult = await executeQuery(insertTaskQuery);
+      
+      if (!taskResult.success) {
+        alert("Failed to create task: " + taskResult.error);
+        return;
+      }
 
-    if (!res.ok) return;
+      // Get the last inserted task ID
+      const getIdQuery = `SELECT LAST_INSERT_ID() as task_id`;
+      const idResult = await executeQuery(getIdQuery);
+      
+      if (!idResult.success || !idResult.rows || idResult.rows.length === 0) {
+        alert("Task created but failed to get task ID");
+        return;
+      }
+      
+      const taskId = idResult.rows[0].task_id;
 
-    setTitle("");
-    setDescription("");
-    setAssignedUsers([]);
-    setDueDate("");
-    setHasReminder(false);
-    setIsUrgent(false);
+      // Insert task assignments for each assigned user
+      for (const userId of assignedUsers) {
+        const assignQuery = `INSERT INTO task_assignments (task_id, user_id, assigned_at) VALUES (${taskId}, ${userId}, NOW())`;
+        await executeQuery(assignQuery);
+      }
 
-    setActiveTab("work");
-    loadTasks();
+      // Reset form
+      setTitle("");
+      setDescription("");
+      setAssignedUsers([]);
+      setDueDate("");
+      setHasReminder(false);
+      setIsUrgent(false);
+
+      setActiveTab("work");
+      loadTasks();
+    } catch (error) {
+      console.error("Error assigning task:", error);
+      alert("Failed to assign task");
+    }
   };
 
   /* ---------- UI ---------- */
@@ -179,7 +236,6 @@ export default function NewTask() {
                   ))}
                 </div>
 
-                {/* ✅ DATE PICKER (FIXED) */}
                 <input
                   type="date"
                   className="newtask-input"
