@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState } from "react";
-import API_URL from "../config/api";
+import { executeQuery, escapeSql } from "../utils/db";
 
 const AuthContext = createContext(null);
 
@@ -41,21 +41,33 @@ export function AuthProvider({ children }) {
   /* ---------- SIGNUP ---------- */
   const signUp = async (display_name, email, password) => {
     try {
-      const res = await fetch(`${API_URL}/auth/signup`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          display_name: display_name.trim(),
-          email: email.trim(),
-          password: password.trim(),
-        }),
-      });
+      const trimmedName = display_name.trim();
+      const trimmedEmail = email.trim();
+      const trimmedPassword = password.trim();
 
-      const data = await res.json();
-      if (!res.ok) return { error: data.error || "Signup failed" };
+      // Check if user already exists
+      const checkQuery = `SELECT id FROM users WHERE email = ${escapeSql(trimmedEmail)}`;
+      const checkResult = await executeQuery(checkQuery);
+
+      if (!checkResult.success) {
+        return { error: checkResult.error || "Database error" };
+      }
+
+      if (checkResult.rows && checkResult.rows.length > 0) {
+        return { error: "Email already registered" };
+      }
+
+      // Insert new user
+      const insertQuery = `INSERT INTO users (name, email, password, created_at) VALUES (${escapeSql(trimmedName)}, ${escapeSql(trimmedEmail)}, ${escapeSql(trimmedPassword)}, NOW())`;
+      const insertResult = await executeQuery(insertQuery);
+
+      if (!insertResult.success) {
+        return { error: insertResult.error || "Signup failed" };
+      }
 
       return { success: true };
-    } catch {
+    } catch (error) {
+      console.error("Signup error:", error);
       return { error: "Server not reachable" };
     }
   };
